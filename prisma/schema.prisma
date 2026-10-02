@@ -1,0 +1,466 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  GUEST
+  REGISTERED
+  TRUSTED_CONTRIBUTOR
+  REVIEWER
+  MODERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ArticleStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  PUBLISHED
+  ARCHIVED
+  DELETED
+}
+
+enum QualityState {
+  DRAFT
+  STUB
+  DEVELOPING
+  REVIEWED
+  VERIFIED
+}
+
+enum ProtectionLevel {
+  NONE
+  SEMI_PROTECTED
+  FULLY_PROTECTED
+}
+
+enum ReportTargetType {
+  ARTICLE
+  REVISION
+  TALK_MESSAGE
+  USER
+}
+
+enum ReportReason {
+  SPAM
+  VANDALISM
+  COPYRIGHT
+  PROMOTIONAL
+  PERSONAL_ATTACK
+  UNSUPPORTED_CLAIMS
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum BlockScope {
+  ALL
+  EDITING_ONLY
+  TALK_ONLY
+}
+
+enum NotificationType {
+  ARTICLE_REVIEW
+  TALK_REPLY
+  WATCHLIST_EDIT
+  REVISION_REVERTED
+  USER_MENTION
+  MODERATION_ACTION
+  POLICY_UPDATE
+  SYSTEM
+}
+
+enum ContributionType {
+  CREATE_ARTICLE
+  EDIT_ARTICLE
+  REVERT_EDIT
+  TALK_POST
+  MODERATION_ACTION
+}
+
+model User {
+  id               String             @id @default(cuid())
+  username         String             @unique
+  email            String             @unique
+  passwordHash     String
+  displayName      String?
+  bio              String?            @db.Text
+  avatarUrl        String?
+  role             Role               @default(REGISTERED)
+  isEmailVerified  Boolean            @default(true)
+  reputation       Int                @default(0)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  articlesCreated   Article[]          @relation("ArticleAuthor")
+  revisionsCreated  ArticleRevision[]  @relation("RevisionAuthor")
+  talkMessages      TalkMessage[]      @relation("TalkAuthor")
+  reportsFiled      Report[]           @relation("ReportAuthor")
+  reportsAssigned   Report[]           @relation("ReportModerator")
+  protectionsApplied ArticleProtection[] @relation("ProtectionAdmin")
+  blocksReceived    UserBlock[]        @relation("BlockedUser")
+  blocksIssued      UserBlock[]        @relation("BlockModerator")
+  notifications     Notification[]     @relation("UserNotifications")
+  watchlist         Watchlist[]        @relation("UserWatchlist")
+  contributions     UserContribution[] @relation("UserContributions")
+  uploadedMedia     Media[]            @relation("MediaUploader")
+  auditLogs         AuditLog[]         @relation("AuditUser")
+  policyRevisions   PolicyRevision[]   @relation("PolicyAuthor")
+
+  @@index([role])
+  @@index([createdAt])
+}
+
+model Article {
+  id                  String             @id @default(cuid())
+  title               String
+  slug                String             @unique
+  summary             String             @db.Text
+  qualityState        QualityState       @default(STUB)
+  status              ArticleStatus      @default(DRAFT)
+  currentRevisionId   String?
+  protectionLevel     ProtectionLevel    @default(NONE)
+  protectionReason    String?
+  protectionExpiresAt DateTime?
+  viewCount           Int                @default(0)
+  createdById         String
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  publishedAt         DateTime?
+
+  author              User               @relation("ArticleAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+  revisions           ArticleRevision[]  @relation("ArticleRevisions")
+  categories          ArticleCategory[]
+  tags                ArticleTag[]
+  references          Reference[]
+  talkPage            TalkPage?
+  protectionLogs      ArticleProtection[]
+  watchers            Watchlist[]
+  contributions       UserContribution[]
+
+  @@index([status, publishedAt])
+  @@index([slug])
+  @@index([createdById])
+  @@index([qualityState])
+  @@index([protectionLevel])
+}
+
+model ArticleRevision {
+  id                 String             @id @default(cuid())
+  articleId          String
+  revisionNumber     Int
+  title              String
+  summary            String             @db.Text
+  content            String             @db.Text
+  editSummary        String             @db.Text
+  isMinorEdit        Boolean            @default(false)
+  createdById        String
+  previousRevisionId String?
+  createdAt          DateTime           @default(now())
+
+  article            Article            @relation("ArticleRevisions", fields: [articleId], references: [id], onDelete: Cascade)
+  author             User               @relation("RevisionAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+  references         Reference[]
+  contributions      UserContribution[]
+
+  @@unique([articleId, revisionNumber])
+  @@index([articleId, createdAt])
+  @@index([createdById])
+}
+
+model Category {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  slug        String            @unique
+  description String?           @db.Text
+  parentId    String?
+  isArchived  Boolean           @default(false)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  parent      Category?         @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[]        @relation("CategoryHierarchy")
+  articles    ArticleCategory[]
+
+  @@index([slug])
+  @@index([parentId])
+}
+
+model Tag {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  slug      String       @unique
+  createdAt DateTime     @default(now())
+  articles  ArticleTag[]
+
+  @@index([slug])
+}
+
+model ArticleCategory {
+  articleId  String
+  categoryId String
+  assignedAt DateTime @default(now())
+
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, categoryId])
+  @@index([categoryId])
+  @@index([articleId])
+}
+
+model ArticleTag {
+  articleId String
+  tagId     String
+
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, tagId])
+  @@index([tagId])
+  @@index([articleId])
+}
+
+model Reference {
+  id              String           @id @default(cuid())
+  articleId       String
+  revisionId      String?
+  title           String
+  authors         String?
+  publisher       String?
+  publicationDate String?
+  url             String?
+  accessDate      String?
+  doiOrIsbn       String?
+  citationNotes   String?          @db.Text
+  orderIndex      Int              @default(0)
+  createdAt       DateTime         @default(now())
+
+  article         Article          @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  revision        ArticleRevision? @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+  @@index([revisionId])
+}
+
+model TalkPage {
+  id          String        @id @default(cuid())
+  articleId   String        @unique
+  isLocked    Boolean       @default(false)
+  lockReason  String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  article     Article       @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  messages    TalkMessage[]
+}
+
+model TalkMessage {
+  id            String        @id @default(cuid())
+  talkPageId    String
+  parentId      String?
+  authorId      String
+  content       String        @db.Text
+  isResolved    Boolean       @default(false)
+  isHidden      Boolean       @default(false)
+  hiddenReason  String?
+  revisionRefId String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  talkPage      TalkPage      @relation(fields: [talkPageId], references: [id], onDelete: Cascade)
+  author        User          @relation("TalkAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  parent        TalkMessage?  @relation("MessageReplies", fields: [parentId], references: [id])
+  replies       TalkMessage[] @relation("MessageReplies")
+
+  @@index([talkPageId, createdAt])
+  @@index([authorId])
+  @@index([parentId])
+}
+
+model Report {
+  id                  String           @id @default(cuid())
+  reporterId          String
+  targetType          ReportTargetType
+  targetId            String
+  reason              ReportReason
+  description         String           @db.Text
+  status              ReportStatus     @default(OPEN)
+  assignedModeratorId String?
+  moderatorNotes      String?          @db.Text
+  resolution          String?          @db.Text
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  reporter            User             @relation("ReportAuthor", fields: [reporterId], references: [id], onDelete: Cascade)
+  assignedModerator   User?            @relation("ReportModerator", fields: [assignedModeratorId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+  @@index([reporterId])
+}
+
+model ArticleProtection {
+  id          String          @id @default(cuid())
+  articleId   String
+  level       ProtectionLevel @default(SEMI_PROTECTED)
+  reason      String          @db.Text
+  appliedById String
+  startAt     DateTime        @default(now())
+  endAt       DateTime?
+  createdAt   DateTime        @default(now())
+
+  article     Article         @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  appliedBy   User            @relation("ProtectionAdmin", fields: [appliedById], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+  @@index([appliedById])
+}
+
+model UserBlock {
+  id          String     @id @default(cuid())
+  userId      String
+  blockedById String
+  reason      String     @db.Text
+  scope       BlockScope @default(ALL)
+  startAt     DateTime   @default(now())
+  endAt       DateTime?
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+
+  user        User       @relation("BlockedUser", fields: [userId], references: [id], onDelete: Cascade)
+  blockedBy   User       @relation("BlockModerator", fields: [blockedById], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@index([blockedById])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String           @db.Text
+  linkUrl   String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user      User             @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+}
+
+model Watchlist {
+  id        String   @id @default(cuid())
+  userId    String
+  articleId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation("UserWatchlist", fields: [userId], references: [id], onDelete: Cascade)
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([userId])
+  @@index([articleId])
+}
+
+model UserContribution {
+  id          String           @id @default(cuid())
+  userId      String
+  articleId   String?
+  revisionId  String?
+  type        ContributionType
+  summary     String           @db.Text
+  createdAt   DateTime         @default(now())
+
+  user        User             @relation("UserContributions", fields: [userId], references: [id], onDelete: Cascade)
+  article     Article?         @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  revision    ArticleRevision? @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([articleId])
+}
+
+model Media {
+  id           String   @id @default(cuid())
+  filename     String
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  storageKey   String
+  url          String
+  caption      String?
+  altText      String?
+  license      String?
+  author       String?
+  attribution  String?
+  uploaderId   String
+  isDeleted    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  uploader     User     @relation("MediaUploader", fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([uploaderId])
+  @@index([isDeleted])
+}
+
+model Policy {
+  id             String           @id @default(cuid())
+  title          String
+  slug           String           @unique
+  summary        String           @db.Text
+  category       String
+  orderIndex     Int              @default(0)
+  currentContent String           @db.Text
+  updatedAt      DateTime         @updatedAt
+
+  revisions      PolicyRevision[]
+
+  @@index([slug])
+  @@index([orderIndex])
+}
+
+model PolicyRevision {
+  id            String   @id @default(cuid())
+  policyId      String
+  title         String
+  content       String   @db.Text
+  changeSummary String   @db.Text
+  authorId      String
+  createdAt     DateTime @default(now())
+
+  policy        Policy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  author        User     @relation("PolicyAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([policyId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  targetType String
+  targetId   String?
+  details    String?  @db.Text
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation("AuditUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+}
